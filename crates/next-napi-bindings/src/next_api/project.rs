@@ -30,7 +30,7 @@ use next_api::{
     },
     project::{
         DebugBuildPaths, DefineEnv, DraftModeOptions, PartialProjectOptions, Project,
-        ProjectContainer, ProjectOptions, WatchOptions,
+        ProjectContainer, ProjectOptions, WatchOptions, activate_lazy_chunk_operation,
     },
     project_asset_hashes_manifest::immutable_hashes_manifest_asset_if_enabled,
     route::{Endpoint, EndpointGroupKey, Route},
@@ -220,53 +220,36 @@ pub struct NapiProjectOptions {
     pub server_hmr: Option<bool>,
 }
 
-/// [NapiProjectOptions] with all fields optional.
+/// The subset of [`NapiProjectOptions`] that may change without restarting the process. Used by
+/// [`project_update`].
+///
+/// Refer to [`NapiProjectOptions`] for documentation on this struct's fields.
 #[napi(object)]
 pub struct NapiPartialProjectOptions {
-    /// An absolute root path  (Unix or Windows path) from which all files must be nested under.
-    /// Trying to access a file outside this root will fail, so think of this as a chroot.
-    /// E.g. `/home/user/projects/my-repo`.
     pub root_path: Option<RcStr>,
 
-    /// A path which contains the app/pages directories, relative to [`Project::root_path`], always
-    /// a Unix path.
-    /// E.g. `apps/my-app`
     pub project_path: Option<RcStr>,
 
-    /// Filesystem watcher options.
     pub watch: Option<NapiWatchOptions>,
 
-    /// The contents of next.config.js, serialized to JSON.
     pub next_config: Option<RcStr>,
 
-    /// A map of environment variables to use when compiling code.
     pub env: Option<Vec<NapiEnvVar>>,
 
-    /// A map of environment variables which should get injected at compile
-    /// time.
     pub define_env: Option<NapiDefineEnv>,
 
-    /// The mode in which Next.js is running.
     pub dev: Option<bool>,
 
-    /// The server actions encryption key.
     pub encryption_key: Option<RcStr>,
 
-    /// The build id.
     pub build_id: Option<RcStr>,
 
-    /// Options for draft mode.
     pub preview_props: Option<NapiDraftModeOptions>,
 
-    /// The browserslist query to use for targeting browsers.
     pub browserslist_query: Option<RcStr>,
 
-    /// Whether to write the route hashes manifest.
     pub write_routes_hashes_manifest: Option<bool>,
 
-    /// When the code is minified, this opts out of the default mangling of
-    /// local names for variables, functions etc., which can be useful for
-    /// debugging/profiling purposes.
     pub no_mangling: Option<bool>,
 }
 
@@ -762,6 +745,23 @@ pub async fn project_update(
         .run(async move { container.update(options).await })
         .or_else(|e| ctx.throw_turbopack_internal_result(&e.into()))
         .await
+}
+
+#[tracing::instrument(level = "info", name = "activate lazy chunk", skip_all)]
+#[napi]
+pub async fn project_activate_lazy_chunk(
+    #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
+    chunk_path: RcStr,
+) -> napi::Result<bool> {
+    let ctx = &project.turbopack_ctx;
+    ctx.turbo_tasks()
+        .run(async move {
+            Ok(*activate_lazy_chunk_operation(chunk_path)
+                .read_strongly_consistent()
+                .await?)
+        })
+        .await
+        .map_err(|error| napi::Error::from_reason(PrettyPrintError(&error.into()).to_string()))
 }
 
 /// Invalidates the filesystem cache so that it will be deleted next time that a turbopack project
@@ -1342,7 +1342,7 @@ async fn app_route_filter_for_write_phase(
 }
 
 #[tracing::instrument(level = "info", name = "write all entrypoints to disk", skip_all)]
-#[napi(ts_return_type = "Promise<TurbopackResult<Partial<NapiEntrypoints>>>")]
+#[napi(ts_return_type = "Promise<TurbopackResult<Partial<NapiEntrypoints> | null>>")]
 pub async fn project_write_all_entrypoints_to_disk(
     #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
     app_dir_only: bool,
@@ -1729,7 +1729,7 @@ async fn output_assets_operation(
 }
 
 #[tracing::instrument(level = "info", name = "get entrypoints", skip_all)]
-#[napi(ts_return_type = "Promise<TurbopackResult<Partial<NapiEntrypoints>>>")]
+#[napi(ts_return_type = "Promise<TurbopackResult<Partial<NapiEntrypoints> | null>>")]
 pub async fn project_entrypoints(
     #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
 ) -> napi::Result<TurbopackResult<Option<NapiEntrypoints>>> {
@@ -1770,7 +1770,10 @@ pub async fn project_entrypoints(
 pub fn project_entrypoints_subscribe(
     env: Env,
     #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
-    #[napi(ts_arg_type = "(err: Error, value: TurbopackResult<Partial<NapiEntrypoints>>) => void")]
+    #[napi(
+        ts_arg_type = "(err: Error, value: TurbopackResult<Partial<NapiEntrypoints> | null>) => \
+                       void"
+    )]
     func: FunctionRef<TurbopackResult<Option<NapiEntrypoints>>, ()>,
 ) -> napi::Result<External<SubscriptionTask>> {
     let turbopack_ctx = project.turbopack_ctx.clone();
@@ -2245,8 +2248,10 @@ pub fn project_update_info_subscribe(
     env: Env,
     #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
     aggregation_ms: u32,
-    #[napi(ts_arg_type = "(err: Error, value: TurbopackResult<UpdateMessage>) => void")]
-    func: FunctionRef<NapiUpdateMessage, ()>,
+    #[napi(ts_arg_type = "(err: Error, value: UpdateMessage) => void")] func: FunctionRef<
+        NapiUpdateMessage,
+        (),
+    >,
 ) -> napi::Result<()> {
     let func: ThreadsafeFunction<UpdateMessage, (), NapiUpdateMessage, Status, true> = func
         .borrow_back(&env)?
@@ -2322,8 +2327,10 @@ impl From<Arc<dyn CompilationEvent>> for NapiCompilationEvent {
 pub fn project_compilation_events_subscribe(
     env: Env,
     #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: &External<ProjectInstance>,
-    #[napi(ts_arg_type = "(err: Error, value: TurbopackResult<CompilationEvent>) => void")]
-    func: FunctionRef<NapiCompilationEvent, ()>,
+    #[napi(ts_arg_type = "(err: Error, value: CompilationEvent) => void")] func: FunctionRef<
+        NapiCompilationEvent,
+        (),
+    >,
     event_types: Option<Vec<String>>,
 ) -> napi::Result<()> {
     let tsfn: ThreadsafeFunction<

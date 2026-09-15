@@ -273,6 +273,7 @@ export const experimentalSchema = {
   imgOptTimeoutInSeconds: z.number().int().optional(),
   imgOptMaxInputPixels: z.number().int().optional(),
   imgOptSequentialRead: z.boolean().optional().nullable(),
+  imgOptMozjpeg: z.boolean().optional(),
   isrFlushToDisk: z.boolean().optional(),
   largePageDataBytes: z.number().optional(),
   linkNoTouchStart: z.boolean().optional(),
@@ -313,6 +314,7 @@ export const experimentalSchema = {
   proxyTimeout: z.number().gte(0).optional(),
   rootParams: z.boolean().optional(),
   mcpServer: z.boolean().optional(),
+  exposeRuntimeErrorsToHMR: z.boolean().optional(),
   removeUncaughtErrorAndRejectionListeners: z.boolean().optional(),
   validateRSCRequestHeaders: z.boolean().optional(),
   scrollRestoration: z.boolean().optional(),
@@ -376,7 +378,7 @@ export const experimentalSchema = {
     .union([z.literal(false), z.literal('full'), z.literal('auto')])
     .optional(),
   turbopackPluginRuntimeStrategy: z
-    .enum(['workerThreads', 'childProcesses'])
+    .enum(['workerThreads', 'childProcesses', 'forceWorkerThreads'])
     .optional(),
   turbopackMinify: z
     .union([
@@ -416,6 +418,7 @@ export const experimentalSchema = {
   turbopackWorkerAssetPrefix: z.string().optional(),
   turbopackClientSideNestedAsyncChunking: z.boolean().optional(),
   turbopackServerSideNestedAsyncChunking: z.boolean().optional(),
+  turbopackLazyDynamicImports: z.boolean().optional(),
   turbopackImportTypeBytes: z.boolean().optional(),
   turbopackUseBuiltinBabel: z.boolean().optional(),
   turbopackUseBuiltinSass: z.boolean().optional(),
